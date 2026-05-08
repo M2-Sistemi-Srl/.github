@@ -47,7 +47,7 @@ jobs:
 
           push_or_pr() {
             local repo=$1
-            local default_branch=$2
+            local target_branch=$2
             local encoded_content=$3
             local existing_sha=$4
             local is_update=$5
@@ -69,7 +69,7 @@ jobs:
                 "repos/$repo/contents/.github/dependabot.yml" \
                 --field message="$commit_msg" \
                 --field content="$encoded_content" \
-                --field branch="$default_branch" \
+                --field branch="$target_branch" \
                 --field sha="$existing_sha" \
                 2>&1)
             else
@@ -78,27 +78,27 @@ jobs:
                 "repos/$repo/contents/.github/dependabot.yml" \
                 --field message="$commit_msg" \
                 --field content="$encoded_content" \
-                --field branch="$default_branch" \
+                --field branch="$target_branch" \
                 2>&1)
             fi
 
             if echo "$push_result" | grep -q '"sha"'; then
               if [[ "$is_update" == "true" ]]; then
-                echo "UPDATED: $repo"
+                echo "UPDATED: $repo (branch: $target_branch)"
               else
-                echo "CREATED: $repo"
+                echo "CREATED: $repo (branch: $target_branch)"
               fi
               return 0
             fi
 
             if echo "$push_result" | grep -q "Repository rule violations\|must be made through a pull request"; then
-              echo "BLOCKED: $repo - apro PR..."
+              echo "BLOCKED: $repo - apro PR su $target_branch..."
 
               local temp_branch="dependabot-setup-$(date +%s)"
               local head_sha
-              head_sha=$(gh api "repos/$repo/git/ref/heads/$default_branch" --jq '.object.sha' 2>/dev/null)
+              head_sha=$(gh api "repos/$repo/git/ref/heads/$target_branch" --jq '.object.sha' 2>/dev/null)
               if [[ -z "$head_sha" ]]; then
-                echo "ERROR: $repo - impossibile recuperare HEAD sha"
+                echo "ERROR: $repo - impossibile recuperare HEAD sha di $target_branch"
                 return 0
               fi
 
@@ -146,7 +146,7 @@ jobs:
                 --field title="$pr_title" \
                 --field body="$pr_body" \
                 --field head="$temp_branch" \
-                --field base="$default_branch" \
+                --field base="$target_branch" \
                 --jq '.html_url' 2>/dev/null)
 
               if [[ -n "$pr_url" ]]; then
@@ -172,26 +172,34 @@ jobs:
               continue
             fi
 
-            DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null)
-            if [[ -z "$DEFAULT_BRANCH" ]]; then
-              echo "ERROR: $repo - impossibile recuperare default branch"
+            # Usa develop se esiste, altrimenti il default branch
+            DEVELOP_EXISTS=$(gh api "repos/$repo/git/ref/heads/develop" --jq '.ref' 2>/dev/null || echo "")
+            if [[ -n "$DEVELOP_EXISTS" ]]; then
+              TARGET_BRANCH="develop"
+            else
+              TARGET_BRANCH=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null)
+              echo "INFO: $repo - branch develop non trovato, uso $TARGET_BRANCH"
+            fi
+
+            if [[ -z "$TARGET_BRANCH" ]]; then
+              echo "ERROR: $repo - impossibile determinare il branch target"
               continue
             fi
 
-            ENCODED_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$DEFAULT_BRANCH" | base64 -w 0)
+            ENCODED_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$TARGET_BRANCH" | base64 -w 0)
 
             EXISTING_SHA=$(gh api "repos/$repo/contents/.github/dependabot.yml" --jq '.sha' 2>/dev/null || echo "")
 
             if [[ -n "$EXISTING_SHA" ]]; then
               if [[ "$FORCE" == "true" ]]; then
-                push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "$EXISTING_SHA" "true"
+                push_or_pr "$repo" "$TARGET_BRANCH" "$ENCODED_CONTENT" "$EXISTING_SHA" "true"
               else
                 echo "SKIP: $repo - gia presente"
               fi
               continue
             fi
 
-            push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "" "false"
+            push_or_pr "$repo" "$TARGET_BRANCH" "$ENCODED_CONTENT" "" "false"
           done
 
           exit 0
