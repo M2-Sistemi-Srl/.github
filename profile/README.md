@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://m2sistemi.it/wp-content/uploads/2021/03/logo-m2sistemi.png" alt="M2 Sistemi Srl" width="250"/>
+  <img src="https://m2sistemi.it/wp-content/uploads/elementor/thumbs/logo-m2-1-r7ktepisc3buabrfpd3dbyh1ij09efsvscxygraq9m.webp" alt="M2 Sistemi Srl" width="250"/>
 </div>
 
 ---
