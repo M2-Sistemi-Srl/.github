@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: '0 8 * * 1'  # ogni lunedì alle 8:00
   workflow_dispatch:       # eseguibile anche manualmente
+    inputs:
+      force:
+        description: 'Sovrascrivi dependabot.yml anche se già presente (true/false)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   setup-dependabot:
@@ -13,6 +22,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ORG_AUTOMATION_TOKEN }}
           ORG: ${{ github.repository_owner }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
         run: |
           # Recupera tutti i repo dell'org (con paginazione automatica)
           gh api "orgs/$ORG/repos" --paginate --jq '.[].full_name' | while read repo; do
@@ -22,23 +32,39 @@ jobs:
               continue
             fi
 
-            # Controlla se il file esiste già
-            if gh api "repos/$repo/contents/.github/dependabot.yml" &>/dev/null; then
-              echo "✅ $repo — già presente, skip"
-              continue
-            fi
-
             # Recupera il branch di default del repo
             DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
 
             DEPENDABOT_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$DEFAULT_BRANCH")
+            ENCODED_CONTENT=$(echo "$DEPENDABOT_CONTENT" | base64 -w 0)
 
-            # Crea il file
+            # Controlla se il file esiste già
+            EXISTING_SHA=$(gh api "repos/$repo/contents/.github/dependabot.yml" --jq '.sha' 2>/dev/null || echo "")
+
+            if [[ -n "$EXISTING_SHA" ]]; then
+              if [[ "$FORCE" == "true" ]]; then
+                # Forza la sovrascrittura passando lo sha del file esistente
+                gh api \
+                  --method PUT \
+                  "repos/$repo/contents/.github/dependabot.yml" \
+                  --field message="ci: update dependabot config (force)" \
+                  --field content="$ENCODED_CONTENT" \
+                  --field branch="$DEFAULT_BRANCH" \
+                  --field sha="$EXISTING_SHA" \
+                  && echo "🔄 $repo — dependabot.yml sovrascritto (force)" \
+                  || echo "❌ $repo — errore nella sovrascrittura"
+              else
+                echo "✅ $repo — già presente, skip"
+              fi
+              continue
+            fi
+
+            # Crea il file (non esisteva)
             gh api \
               --method PUT \
               "repos/$repo/contents/.github/dependabot.yml" \
               --field message="ci: add dependabot config" \
-              --field content="$(echo "$DEPENDABOT_CONTENT" | base64 -w 0)" \
+              --field content="$ENCODED_CONTENT" \
               --field branch="$DEFAULT_BRANCH" \
               && echo "🚀 $repo — dependabot.yml creato" \
               || echo "❌ $repo — errore nella creazione"
