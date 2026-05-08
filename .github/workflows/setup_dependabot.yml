@@ -31,16 +31,7 @@ jobs:
             # Recupera il branch di default del repo
             DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
 
-            DEPENDABOT_CONTENT=$(cat <<EOF
-version: 2
-updates:
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    target-branch: "$DEFAULT_BRANCH"
-EOF
-)
+            DEPENDABOT_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$DEFAULT_BRANCH")
 
             # Crea il file
             gh api \
