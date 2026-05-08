@@ -24,13 +24,12 @@ jobs:
           ORG: ${{ github.repository_owner }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
         run: |
-          # Funzione: tenta push diretto, se bloccato apre una PR
           push_or_pr() {
             local repo=$1
             local default_branch=$2
             local encoded_content=$3
             local existing_sha=$4
-            local is_update=$5   # "true" se aggiornamento, "false" se creazione
+            local is_update=$5
 
             local commit_msg pr_title
             if [[ "$is_update" == "true" ]]; then
@@ -77,7 +76,6 @@ jobs:
 
               local temp_branch="dependabot-setup-$(date +%s)"
 
-              # Recupera lo SHA del commit HEAD del default branch
               local head_sha
               head_sha=$(gh api "repos/$repo/git/ref/heads/$default_branch" --jq '.object.sha' 2>/dev/null)
               if [[ -z "$head_sha" ]]; then
@@ -85,7 +83,6 @@ jobs:
                 return 1
               fi
 
-              # Crea il branch temporaneo
               gh api \
                 --method POST \
                 "repos/$repo/git/refs" \
@@ -93,7 +90,6 @@ jobs:
                 --field sha="$head_sha" \
                 > /dev/null 2>&1 || { echo "❌ $repo — errore creazione branch temporaneo"; return 1; }
 
-              # Push del file sul branch temporaneo
               local put_result
               if [[ "$is_update" == "true" ]]; then
                 put_result=$(gh api \
@@ -120,7 +116,6 @@ jobs:
                 return 1
               fi
 
-              # Apri la PR
               local pr_url
               pr_url=$(gh api \
                 --method POST \
@@ -144,13 +139,37 @@ jobs:
             fi
           }
 
-          # Recupera tutti i repo dell'org (con paginazione automatica)
           gh api "orgs/$ORG/repos" --paginate --jq '.[].full_name' | while read repo; do
 
-            # Salta il repo .github stesso
             if [[ "$repo" == "$ORG/.github" ]]; then
               continue
             fi
 
-            # Recupera il branch di default del repo
-            DEFAULT_BRANCH=$(gh api "repos*
+            DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
+
+            DEPENDABOT_CONTENT=$(cat <<DEPENDABOT
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "$DEFAULT_BRANCH"
+DEPENDABOT
+            )
+
+            ENCODED_CONTENT=$(echo "$DEPENDABOT_CONTENT" | base64 -w 0)
+
+            EXISTING_SHA=$(gh api "repos/$repo/contents/.github/dependabot.yml" --jq '.sha' 2>/dev/null || echo "")
+
+            if [[ -n "$EXISTING_SHA" ]]; then
+              if [[ "$FORCE" == "true" ]]; then
+                push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "$EXISTING_SHA" "true"
+              else
+                echo "✅ $repo — già presente, skip"
+              fi
+              continue
+            fi
+
+            push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "" "false"
+          done
