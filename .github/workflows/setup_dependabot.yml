@@ -1,0 +1,54 @@
+name: Setup Dependabot on all repos
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # ogni lunedì alle 8:00
+  workflow_dispatch:       # eseguibile anche manualmente
+
+jobs:
+  setup-dependabot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Dependabot config on all org repos
+        env:
+          GH_TOKEN: ${{ secrets.ORG_AUTOMATION_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          # Recupera tutti i repo dell'org (con paginazione automatica)
+          gh api "orgs/$ORG/repos" --paginate --jq '.[].full_name' | while read repo; do
+
+            # Salta il repo .github stesso
+            if [[ "$repo" == "$ORG/.github" ]]; then
+              continue
+            fi
+
+            # Controlla se il file esiste già
+            if gh api "repos/$repo/contents/.github/dependabot.yml" &>/dev/null; then
+              echo "✅ $repo — già presente, skip"
+              continue
+            fi
+
+            # Recupera il branch di default del repo
+            DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
+
+            DEPENDABOT_CONTENT=$(cat <<EOF
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "$DEFAULT_BRANCH"
+EOF
+)
+
+            # Crea il file
+            gh api \
+              --method PUT \
+              "repos/$repo/contents/.github/dependabot.yml" \
+              --field message="ci: add dependabot config" \
+              --field content="$(echo "$DEPENDABOT_CONTENT" | base64 -w 0)" \
+              --field branch="$DEFAULT_BRANCH" \
+              && echo "🚀 $repo — dependabot.yml creato" \
+              || echo "❌ $repo — errore nella creazione"
+          done
