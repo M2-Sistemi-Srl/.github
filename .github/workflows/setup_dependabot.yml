@@ -31,7 +31,7 @@ jobs:
             local existing_sha=$4
             local is_update=$5
 
-            local commit_msg pr_title
+            local commit_msg pr_title pr_body
             if [[ "$is_update" == "true" ]]; then
               commit_msg="ci: update dependabot config (force)"
               pr_title="ci: update dependabot config"
@@ -39,6 +39,7 @@ jobs:
               commit_msg="ci: add dependabot config"
               pr_title="ci: add dependabot config"
             fi
+            pr_body="Aggiunta automatica del file .github/dependabot.yml tramite workflow centralizzato."
 
             local push_result
             if [[ "$is_update" == "true" ]]; then
@@ -62,22 +63,22 @@ jobs:
 
             if echo "$push_result" | grep -q '"sha"'; then
               if [[ "$is_update" == "true" ]]; then
-                echo "🔄 $repo — dependabot.yml sovrascritto (force)"
+                echo "UPDATED: $repo - dependabot.yml sovrascritto (force)"
               else
-                echo "🚀 $repo — dependabot.yml creato"
+                echo "CREATED: $repo - dependabot.yml creato"
               fi
               return 0
             fi
 
             if echo "$push_result" | grep -q "Repository rule violations\|must be made through a pull request"; then
-              echo "⚠️  $repo — push diretto bloccato, apro PR..."
+              echo "BLOCKED: $repo - push diretto bloccato, apro PR..."
 
               local temp_branch="dependabot-setup-$(date +%s)"
 
               local head_sha
               head_sha=$(gh api "repos/$repo/git/ref/heads/$default_branch" --jq '.object.sha' 2>/dev/null)
               if [[ -z "$head_sha" ]]; then
-                echo "❌ $repo — impossibile recuperare HEAD sha"
+                echo "ERROR: $repo - impossibile recuperare HEAD sha"
                 return 1
               fi
 
@@ -86,7 +87,7 @@ jobs:
                 "repos/$repo/git/refs" \
                 --field ref="refs/heads/$temp_branch" \
                 --field sha="$head_sha" \
-                > /dev/null 2>&1 || { echo "❌ $repo — errore creazione branch temporaneo"; return 1; }
+                > /dev/null 2>&1 || { echo "ERROR: $repo - errore creazione branch temporaneo"; return 1; }
 
               local put_result
               if [[ "$is_update" == "true" ]]; then
@@ -109,7 +110,7 @@ jobs:
               fi
 
               if ! echo "$put_result" | grep -q '"sha"'; then
-                echo "❌ $repo — errore push su branch temporaneo"
+                echo "ERROR: $repo - errore push su branch temporaneo"
                 gh api --method DELETE "repos/$repo/git/refs/heads/$temp_branch" > /dev/null 2>&1
                 return 1
               fi
@@ -119,20 +120,20 @@ jobs:
                 --method POST \
                 "repos/$repo/pulls" \
                 --field title="$pr_title" \
-                --field body="Aggiunta automatica del file \`.github/dependabot.yml\` tramite workflow centralizzato." \
+                --field body="$pr_body" \
                 --field head="$temp_branch" \
                 --field base="$default_branch" \
                 --jq '.html_url' 2>/dev/null)
 
               if [[ -n "$pr_url" ]]; then
-                echo "📬 $repo — PR aperta: $pr_url"
+                echo "PR_OPENED: $repo - $pr_url"
               else
-                echo "❌ $repo — errore apertura PR"
+                echo "ERROR: $repo - errore apertura PR"
                 gh api --method DELETE "repos/$repo/git/refs/heads/$temp_branch" > /dev/null 2>&1
                 return 1
               fi
             else
-              echo "❌ $repo — errore imprevisto: $push_result"
+              echo "ERROR: $repo - errore imprevisto: $push_result"
               return 1
             fi
           }
@@ -153,7 +154,7 @@ jobs:
               if [[ "$FORCE" == "true" ]]; then
                 push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "$EXISTING_SHA" "true"
               else
-                echo "✅ $repo — già presente, skip"
+                echo "SKIP: $repo - gia presente"
               fi
               continue
             fi
