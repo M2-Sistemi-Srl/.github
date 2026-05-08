@@ -3,7 +3,7 @@ name: Setup Dependabot on all repos
 on:
   schedule:
     - cron: '0 8 * * 1'  # ogni lunedì alle 8:00
-  workflow_dispatch:       # eseguibile anche manualmente
+  workflow_dispatch:
     inputs:
       force:
         description: 'Sovrascrivi dependabot.yml anche se già presente (true/false)'
@@ -18,12 +18,33 @@ jobs:
   setup-dependabot:
     runs-on: ubuntu-latest
     steps:
+      - name: Verifica token e accesso org
+        env:
+          GH_TOKEN: ${{ secrets.ORG_AUTOMATION_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          set +e
+          echo "=== Verifica token ==="
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "ERRORE: ORG_AUTOMATION_TOKEN non impostato!"
+            exit 1
+          fi
+          echo "Token presente: OK"
+          echo "=== Verifica accesso org ==="
+          RESULT=$(gh api "orgs/$ORG" --jq '.login' 2>&1)
+          echo "Risposta API org: $RESULT"
+          echo "=== Lista repo (prime 5) ==="
+          gh api "orgs/$ORG/repos?per_page=5" --jq '.[].full_name' 2>&1
+          echo "=== Fine diagnostica ==="
+
       - name: Setup Dependabot config on all org repos
         env:
           GH_TOKEN: ${{ secrets.ORG_AUTOMATION_TOKEN }}
           ORG: ${{ github.repository_owner }}
           FORCE: ${{ github.event.inputs.force || 'false' }}
         run: |
+          set +e
+
           push_or_pr() {
             local repo=$1
             local default_branch=$2
@@ -63,23 +84,22 @@ jobs:
 
             if echo "$push_result" | grep -q '"sha"'; then
               if [[ "$is_update" == "true" ]]; then
-                echo "UPDATED: $repo - dependabot.yml sovrascritto (force)"
+                echo "UPDATED: $repo"
               else
-                echo "CREATED: $repo - dependabot.yml creato"
+                echo "CREATED: $repo"
               fi
               return 0
             fi
 
             if echo "$push_result" | grep -q "Repository rule violations\|must be made through a pull request"; then
-              echo "BLOCKED: $repo - push diretto bloccato, apro PR..."
+              echo "BLOCKED: $repo - apro PR..."
 
               local temp_branch="dependabot-setup-$(date +%s)"
-
               local head_sha
               head_sha=$(gh api "repos/$repo/git/ref/heads/$default_branch" --jq '.object.sha' 2>/dev/null)
               if [[ -z "$head_sha" ]]; then
                 echo "ERROR: $repo - impossibile recuperare HEAD sha"
-                return 1
+                return 0
               fi
 
               gh api \
@@ -87,7 +107,11 @@ jobs:
                 "repos/$repo/git/refs" \
                 --field ref="refs/heads/$temp_branch" \
                 --field sha="$head_sha" \
-                > /dev/null 2>&1 || { echo "ERROR: $repo - errore creazione branch temporaneo"; return 1; }
+                > /dev/null 2>&1
+              if [[ $? -ne 0 ]]; then
+                echo "ERROR: $repo - errore creazione branch temporaneo"
+                return 0
+              fi
 
               local put_result
               if [[ "$is_update" == "true" ]]; then
@@ -112,7 +136,7 @@ jobs:
               if ! echo "$put_result" | grep -q '"sha"'; then
                 echo "ERROR: $repo - errore push su branch temporaneo"
                 gh api --method DELETE "repos/$repo/git/refs/heads/$temp_branch" > /dev/null 2>&1
-                return 1
+                return 0
               fi
 
               local pr_url
@@ -130,21 +154,29 @@ jobs:
               else
                 echo "ERROR: $repo - errore apertura PR"
                 gh api --method DELETE "repos/$repo/git/refs/heads/$temp_branch" > /dev/null 2>&1
-                return 1
               fi
             else
-              echo "ERROR: $repo - errore imprevisto: $push_result"
-              return 1
+              echo "ERROR: $repo - $push_result"
             fi
+            return 0
           }
 
-          gh api "orgs/$ORG/repos" --paginate --jq '.[].full_name' | while read repo; do
+          REPOS=$(gh api "orgs/$ORG/repos" --paginate --jq '.[].full_name' 2>&1)
+          if [[ $? -ne 0 ]]; then
+            echo "ERRORE recupero lista repo: $REPOS"
+            exit 1
+          fi
 
+          echo "$REPOS" | while read repo; do
             if [[ "$repo" == "$ORG/.github" ]]; then
               continue
             fi
 
-            DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
+            DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch' 2>/dev/null)
+            if [[ -z "$DEFAULT_BRANCH" ]]; then
+              echo "ERROR: $repo - impossibile recuperare default branch"
+              continue
+            fi
 
             ENCODED_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$DEFAULT_BRANCH" | base64 -w 0)
 
@@ -161,3 +193,5 @@ jobs:
 
             push_or_pr "$repo" "$DEFAULT_BRANCH" "$ENCODED_CONTENT" "" "false"
           done
+
+          exit 0
