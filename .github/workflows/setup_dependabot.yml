@@ -40,7 +40,6 @@ jobs:
               pr_title="ci: add dependabot config"
             fi
 
-            # --- Tentativo 1: push diretto sul branch di default ---
             local push_result
             if [[ "$is_update" == "true" ]]; then
               push_result=$(gh api \
@@ -70,7 +69,6 @@ jobs:
               return 0
             fi
 
-            # --- Tentativo 2: branch temporaneo + PR ---
             if echo "$push_result" | grep -q "Repository rule violations\|must be made through a pull request"; then
               echo "⚠️  $repo — push diretto bloccato, apro PR..."
 
@@ -147,18 +145,7 @@ jobs:
 
             DEFAULT_BRANCH=$(gh api "repos/$repo" --jq '.default_branch')
 
-            DEPENDABOT_CONTENT=$(cat <<DEPENDABOT
-version: 2
-updates:
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    target-branch: "$DEFAULT_BRANCH"
-DEPENDABOT
-            )
-
-            ENCODED_CONTENT=$(echo "$DEPENDABOT_CONTENT" | base64 -w 0)
+            ENCODED_CONTENT=$(printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/"\n    schedule:\n      interval: "weekly"\n    target-branch: "%s"\n' "$DEFAULT_BRANCH" | base64 -w 0)
 
             EXISTING_SHA=$(gh api "repos/$repo/contents/.github/dependabot.yml" --jq '.sha' 2>/dev/null || echo "")
 
